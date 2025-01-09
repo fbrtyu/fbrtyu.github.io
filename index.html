@@ -9,12 +9,17 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"
         crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="./style.css">
 </head>
 
 <body>
     <div class="container">
         <video class="input_video"></video>
         <canvas class="output_canvas" width="1280px" height="720px"></canvas>
+        <p id="eyes">Глаза: </p>
+        <p id="eyesblinking">Частота моргания: </p>
+        <p id="mouth">Рот: </p>
+        <p id="eyesdirection">Направление взгляда: </p>
     </div>
 </body>
 
@@ -34,7 +39,7 @@
         })
         .catch(function (err) {
             console.log(err.name + ": " + err.message);
-        }); // always check for errors at the end.
+        });
 
     const videoElement = document.getElementsByClassName('input_video')[0];
     const canvasElement = document.getElementsByClassName('output_canvas')[0];
@@ -57,9 +62,8 @@
                 drawConnectors(canvasCtx, landmarks, FACEMESH_LEFT_IRIS, { color: '#30FF30' });
                 //drawConnectors(canvasCtx, landmarks, FACEMESH_FACE_OVAL, { color: '#E0E0E0' });
                 //drawConnectors(canvasCtx, landmarks, FACEMESH_LIPS, { color: '#E0E0E0' });
-                ear(landmarks);
+                eyesblinking(landmarks);
             }
-            //console.log(FACEMESH_RIGHT_EYE);
         }
         canvasCtx.restore();
     }
@@ -89,16 +93,45 @@
 
     camera.start();
 
-    function ear(landmarks) {
+    var flag = false
+    var count = 0
+    var freq = 0
+    var start = 0
+    var end = 0
+
+    setInterval(() => {
+        // freq = freq - 9;
+        document.getElementById("eyesblinking").innerText = "Частота моргания: " + freq;
+        count = 0;
+        freq = 0;
+    }, 1000 * 60)
+
+    function eyesblinking(landmarks) {
         const x1 = landmarks[159].x;
         const y1 = landmarks[159].y;
 
         const x2 = landmarks[145].x;
         const y2 = landmarks[145].y;
 
-        const dist = Math.abs(x1 - x2) + Math.abs(y1 - y2);
+        const dist = (Math.abs(x1 - x2) + Math.abs(y1 - y2)) * 100;
 
-        console.log(dist);
+        if (dist >= 1.8 && dist <= 3.3) {
+            document.getElementById("eyes").innerText = "Глаза: ОТКРЫТЫ"
+            if (flag) {
+                console.log(`Blinking: ${60 / ((end - start) / 1000)}ms`);
+                document.getElementById("eyesblinking").innerText = "Частота моргания: " + 60 / ((end - start) / 1000);
+                count++; start = new Date().getTime();
+                flag = false
+            }
+        }
+
+        if (dist >= 0.3 && dist <= 1.8) {
+            document.getElementById("eyes").innerText = "Глаза: ЗАКРЫТЫ"
+            end = new Date().getTime();
+            flag = true
+        }
+
+        freq = count / 60 * 100
     }
 </script>
 
