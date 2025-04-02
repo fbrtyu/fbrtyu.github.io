@@ -32,7 +32,7 @@
 
 <script type="module">
     // Выбирает разрешение камеры близкое к 1280x720.
-    var constraints = { audio: true, video: { width: 1280, height: 720, facingMode: "user" } };
+    var constraints = { audio: true, video: { width: 1280, height: 720, facingMode: { exact: "user" } } };
 
     navigator.mediaDevices
         .getUserMedia(constraints)
