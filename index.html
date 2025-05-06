@@ -2,143 +2,185 @@
 <html>
 
 <head>
-    <meta charset="utf-8">
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"
-        crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"
-        crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
-    <link rel="stylesheet" href="./style.css">
-    <link rel="manifest" href="./manifest.json">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="application-name" content="myproject">
-    <meta name="apple-mobile-web-app-title" content="myproject">
-    <meta name="msapplication-starturl" content="/">
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <title>Выделение зрачка (Canvas + OpenCV.js)</title>
+  <style>
+    canvas {
+      border: 1px solid black;
+      margin: 10px;
+    }
+
+    video {
+      display: none;
+    }
+  </style>
 </head>
 
 <body>
-    <div class="container">
-        <video class="input_video"></video>
-        <canvas class="output_canvas" width="1280px" height="720px"></canvas>
-        <p id="eyes">Глаза: </p>
-        <p id="eyesblinking">Частота моргания: </p>
-        <p id="mouth">Рот: </p>
-        <p id="eyesdirection">Направление взгляда: </p>
-    </div>
+  <h2>Выделение зрачка (загрузка или вебкамера)</h2>
+  <div id="info"></div>
+  <button onclick="downloadPupilData()">📄 Сохранить данные</button>
+
+  <input type="file" id="upload" accept="image/*" />
+  <button onclick="startCamera()">📷 Камера</button>
+  <br />
+  <label><input type="radio" name="method" value="contours" checked /> Контуры</label>
+  <label><input type="radio" name="method" value="hough" /> HoughCircles</label>
+
+  <br />
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvasOutput"></canvas>
+
+  <script async src="./opencv.js" onload="onOpenCvReady()"></script>
+  <script>
+    let streaming = false;
+    let video = document.getElementById('video');
+    let canvas = document.getElementById('canvasOutput');
+    let ctx = canvas.getContext('2d');
+
+    function startCamera() {
+      navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+        video.srcObject = stream;
+        video.play();
+        streaming = true;
+        setTimeout(processCameraFrame, 500);
+      });
+    }
+
+    function getMethod() {
+      return document.querySelector('input[name="method"]:checked').value;
+    }
+
+    function processCameraFrame() {
+      if (!streaming) return;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      detectPupil();
+      requestAnimationFrame(processCameraFrame);
+    }
+
+    function onOpenCvReady() {
+      document.getElementById('upload').addEventListener('change', function (e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const img = new Image();
+        img.onload = function () {
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          detectPupil();
+        };
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    function detectPupil() {
+      let src = cv.imread(canvas);
+      let gray = new cv.Mat();
+      let blurred = new cv.Mat();
+
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.GaussianBlur(gray, blurred, new cv.Size(7, 7), 2);
+
+      if (getMethod() === "contours") {
+        let binary = new cv.Mat();
+        let contours = new cv.MatVector();
+        let hierarchy = new cv.Mat();
+        cv.threshold(blurred, binary, 30, 255, cv.THRESH_BINARY_INV);
+        cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+        let maxArea = 0, bestContour = null;
+        for (let i = 0; i < contours.size(); i++) {
+          const cnt = contours.get(i);
+          const area = cv.contourArea(cnt);
+          const perimeter = cv.arcLength(cnt, true);
+          const circularity = 4 * Math.PI * area / (perimeter * perimeter + 1e-5);
+          //if (area > 100 && circularity > 0.6 && area > maxArea) {
+          if (area > 50 && area > maxArea) {
+            maxArea = area;
+            bestContour = cnt;
+          }
+        }
+
+        if (bestContour) {
+          const moments = cv.moments(bestContour);
+          const cx = Math.round(moments.m10 / moments.m00);
+          const cy = Math.round(moments.m01 / moments.m00);
+          const radius = Math.sqrt(maxArea / Math.PI);
+          drawCircle(cx, cy, radius);
+        }
+
+        binary.delete(); contours.delete(); hierarchy.delete();
+      }
+
+      else if (getMethod() === "hough") {
+        let circles = new cv.Mat();
+        cv.HoughCircles(blurred, circles, cv.HOUGH_GRADIENT, 1, 20, 100, 15, 5, 60);
+
+        if (circles.rows > 0) {
+          for (let i = 0; i < circles.cols; ++i) {
+            let x = circles.data32F[i * 3];
+            let y = circles.data32F[i * 3 + 1];
+            let r = circles.data32F[i * 3 + 2];
+            drawCircle(x, y, r);
+            break; // нарисуем только первый
+          }
+        }
+
+        for (let i = 0; i < circles.cols; ++i) {
+          let x = circles.data32F[i * 3];
+          let y = circles.data32F[i * 3 + 1];
+          let r = circles.data32F[i * 3 + 2];
+          drawCircle(x, y, r);
+        }
+        circles.delete();
+      }
+
+      src.delete(); gray.delete(); blurred.delete();
+    }
+
+    let lastPupilData = null;
+
+    function drawCircle(x, y, r) {
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, 2 * Math.PI);
+      ctx.strokeStyle = "red";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Вывод информации
+      const infoBox = document.getElementById("info");
+      const diameter = (2 * r).toFixed(1);
+      infoBox.innerHTML = `
+    <strong>Координаты зрачка:</strong> (${Math.round(x)}, ${Math.round(y)})<br>
+    <strong>Радиус:</strong> ${r.toFixed(1)} px<br>
+    <strong>Диаметр:</strong> ${diameter} px
+  `;
+    }
+
+    // function downloadPupilData() {
+    //   if (!lastPupilData) return;
+    //   const blob = new Blob([JSON.stringify(lastPupilData, null, 2)], { type: "application/json" });
+    //   const a = document.createElement("a");
+    //   a.href = URL.createObjectURL(blob);
+    //   a.download = "pupil_data.json";
+    //   a.click();
+    // }
+
+    function downloadPupilData() {
+      if (!lastPupilData) {
+        alert("Нет данных зрачка для сохранения.");
+        return;
+      }
+      const blob = new Blob([JSON.stringify(lastPupilData, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "pupil_data.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+
+  </script>
 </body>
-
-<script type="module">
-    // Выбирает разрешение камеры близкое к 1280x720.
-    var constraints = { audio: true, video: { width: 1280, height: 720, facingMode: { exact: "user" } } };
-
-    navigator.mediaDevices
-        .getUserMedia(constraints)
-        .then(function (mediaStream) {
-            let video = document.querySelector("video");
-            video.srcObject = mediaStream;
-            video.onloadedmetadata = function (e) {
-                video.play();
-            };
-        })
-        .catch(function (err) {
-            console.log(err.name + ": " + err.message);
-        });
-
-    const videoElement = document.getElementsByClassName('input_video')[0];
-    const canvasElement = document.getElementsByClassName('output_canvas')[0];
-    const canvasCtx = canvasElement.getContext('2d');
-    const width = 1280;
-    const height = 720;
-
-    function onResults(results) {
-        canvasCtx.save();
-        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-        canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-        if (results.multiFaceLandmarks) {
-            for (const landmarks of results.multiFaceLandmarks) {
-                //drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELATION, { color: '#C0C0C070', lineWidth: 1 });
-                drawConnectors(canvasCtx, landmarks, FACEMESH_RIGHT_EYE, { color: '#FF3030' });
-                //drawConnectors(canvasCtx, landmarks, FACEMESH_RIGHT_EYEBROW, { color: '#FF3030' });
-                drawConnectors(canvasCtx, landmarks, FACEMESH_RIGHT_IRIS, { color: '#FF3030' });
-                drawConnectors(canvasCtx, landmarks, FACEMESH_LEFT_EYE, { color: '#30FF30' });
-                //drawConnectors(canvasCtx, landmarks, FACEMESH_LEFT_EYEBROW, { color: '#30FF30' });
-                drawConnectors(canvasCtx, landmarks, FACEMESH_LEFT_IRIS, { color: '#30FF30' });
-                //drawConnectors(canvasCtx, landmarks, FACEMESH_FACE_OVAL, { color: '#E0E0E0' });
-                //drawConnectors(canvasCtx, landmarks, FACEMESH_LIPS, { color: '#E0E0E0' });
-                eyesblinking(landmarks);
-            }
-        }
-        canvasCtx.restore();
-    }
-
-    const faceMesh = new FaceMesh({
-        locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-        }
-    });
-
-    faceMesh.setOptions({
-        maxNumFaces: 1,
-        refineLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-    });
-
-    faceMesh.onResults(onResults);
-
-    const camera = new Camera(videoElement, {
-        onFrame: async () => {
-            await faceMesh.send({ image: videoElement });
-        },
-        width: 1280,
-        height: 720
-    });
-
-    camera.start();
-
-    var flag = false
-    var count = 0
-    var freq = 0
-    var start = 0
-    var end = 0
-
-    setInterval(() => {
-        // freq = freq - 9;
-        document.getElementById("eyesblinking").innerText = "Частота моргания: " + freq;
-        count = 0;
-        freq = 0;
-    }, 1000 * 60)
-
-    function eyesblinking(landmarks) {
-        const x1 = landmarks[159].x;
-        const y1 = landmarks[159].y;
-
-        const x2 = landmarks[145].x;
-        const y2 = landmarks[145].y;
-
-        const dist = (Math.abs(x1 - x2) + Math.abs(y1 - y2)) * 100;
-
-        if (dist >= 1.8 && dist <= 3.3) {
-            document.getElementById("eyes").innerText = "Глаза: ОТКРЫТЫ"
-            if (flag) {
-                console.log(`Blinking: ${60 / ((end - start) / 1000)}ms`);
-                document.getElementById("eyesblinking").innerText = "Частота моргания: " + 60 / ((end - start) / 1000);
-                count++; start = new Date().getTime();
-                flag = false
-            }
-        }
-
-        if (dist >= 0.3 && dist <= 1.8) {
-            document.getElementById("eyes").innerText = "Глаза: ЗАКРЫТЫ"
-            end = new Date().getTime();
-            flag = true
-        }
-
-        freq = count / 60 * 100
-    }
-</script>
 
 </html>
